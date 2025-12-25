@@ -1,0 +1,172 @@
+name: Permanent-VPS-with-Tailscale
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/55 * * * *'  # يتجدد كل 55 دقيقة
+
+jobs:
+  permanent-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 0
+    
+    steps:
+      - name: Start Permanent VPS
+        run: |
+          echo "🚀 بدء VPS دائم مع Tailscale..."
+          echo "⏰ الوقت: $(date)"
+          echo "🔗 سيربط بـ Tailscale تلقائياً"
+
+      - name: Install System Requirements
+        run: |
+          sudo apt update -y
+          sudo apt install -y openssh-server curl wget screen
+          echo "✅ النظام جاهز"
+
+      - name: Configure Permanent SSH
+        run: |
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+          
+          # كلمة مرور سهلة للتذكر
+          echo "root:vps123456" | sudo chpasswd
+          
+          # إعدادات SSH دائمة
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          echo "ClientAliveInterval 30" | sudo tee -a /etc/ssh/sshd_config
+          echo "ClientAliveCountMax 86400" | sudo tee -a /etc/ssh/sshd_config
+          
+          sudo systemctl restart ssh
+          echo "✅ SSH جاهز | User: root | Pass: vps123456"
+
+      - name: Setup Tailscale Connection
+        run: |
+          # تثبيت Tailscale
+          echo "⬇️ جاري تثبيت Tailscale..."
+          curl -fsSL https://tailscale.com/install.sh | sh
+          
+          # تشغيل Tailscale مع المفتاح السري
+          echo "🔗 جاري الاتصال بـ Tailscale..."
+          sudo tailscale up \
+            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
+            --hostname="github-vps-$(date +%s)" \
+            --accept-dns=false \
+            --accept-routes \
+            --reset
+          
+          # انتظار الاتصال
+          sleep 15
+          
+          # الحصول على IP
+          TS_IP=$(tailscale ip -4 | head -n 1)
+          
+          if [ -z "$TS_IP" ]; then
+            echo "❌ فشل الاتصال بـ Tailscale"
+            echo "⚠️ تأكد من:"
+            echo "1. Auth Key صحيح في GitHub Secrets"
+            echo "2. حساب Tailscale نشط"
+            exit 1
+          fi
+          
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          echo "✅ اتصال Tailscale ناجح!"
+          echo "📍 IP الخاص بك: $TS_IP"
+          echo "🖥️  للاتصال: ssh root@$TS_IP"
+          echo "🔑 كلمة المرور: vps123456"
+
+      - name: Create Always-Online System
+        run: |
+          # نظام البقاء متصل للأبد
+          cat << 'EOF' > /always_online.sh
+          #!/bin/bash
+          
+          echo "🔌 نظام الاتصال الدائم يعمل..."
+          echo "🕐 البدء: $(date)"
+          
+          while true; do
+            # التحقق من Tailscale
+            if ! tailscale status 2>/dev/null | grep -q "active"; then
+              echo "⚠️ فقدان الاتصال، إعادة المحاولة..."
+              
+              # إعادة الاتصال
+              sudo tailscale up \
+                --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
+                --hostname="github-vps-reconnect-$(date +%s)" \
+                --accept-dns=false \
+                --reset
+              
+              sleep 10
+              NEW_IP=$(tailscale ip -4 | head -n 1)
+              echo "✅ متصل مرة أخرى! IP: $NEW_IP"
+            fi
+            
+            # عرض الحالة كل 5 دقائق
+            IP=$(tailscale ip -4 | head -n 1 2>/dev/null || echo "جاري الاتصال...")
+            echo "🌐 [$IP] - $(date)"
+            
+            sleep 300
+          done
+          EOF
+          
+          chmod +x /always_online.sh
+          
+          # تشغيله في الخلفية
+          screen -dmS always-online bash -c "/always_online.sh"
+          
+          echo "✅ نظام الاتصال الدائم يعمل في الخلفية"
+
+      - name: Display Connection Info
+        run: |
+          TS_IP=$(tailscale ip -4 | head -n 1)
+          
+          echo ""
+          echo "========================================="
+          echo "🎉 VPS جاهز للاستخدام!"
+          echo "========================================="
+          echo ""
+          echo "📌 معلومات الاتصال:"
+          echo "🌐 IP: $TS_IP"
+          echo "🖥️  SSH Command: ssh root@$TS_IP"
+          echo "🔐 Password: vps123456"
+          echo ""
+          echo "⚙️ ميزات النظام:"
+          echo "✅ اتصال Tailscale دائم"
+          echo "✅ إعادة اتصال تلقائي"
+          echo "✅ SSH متاح 24/7"
+          echo "✅ تجديد تلقائي كل 55 دقيقة"
+          echo ""
+          echo "📱 للاتصال من أي جهاز:"
+          echo "1. حمل تطبيق Tailscale"
+          echo "2. سجل الدخول بنفس حسابك"
+          echo "3. اتصل عبر: ssh root@$TS_IP"
+          echo ""
+          echo "🔧 استكشاف الأخطاء:"
+          echo "• تحقق من Tailscale Admin Console"
+          echo "• تأكد من تفعيل الجهاز"
+          echo "• جرب إعادة التشغيل إذا لزم الأمر"
+          echo ""
+          echo "⏰ وقت البدء: $(date)"
+          echo "========================================="
+
+      - name: Keep Alive Forever
+        run: |
+          echo "🔒 VPS يعمل بشكل دائم..."
+          echo "📡 مراقبة الاتصال..."
+          
+          # حلقة البقاء نشطاً
+          counter=0
+          while true; do
+            IP=$(tailscale ip -4 | head -n 1 2>/dev/null || echo "في الانتظار...")
+            
+            # تحديث كل 30 دقيقة
+            if [ $((counter % 30)) -eq 0 ]; then
+              echo ""
+              echo "🔄 تحديث الحالة - $(date)"
+              echo "📍 IP: $IP"
+              echo "⏱️  وقت التشغيل: $((counter/2)) ساعة"
+              echo "🔗 SSH: ssh root@$IP"
+            fi
+            
+            sleep 120
+            counter=$((counter + 1))
+          done
